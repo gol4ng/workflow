@@ -4,164 +4,182 @@ import (
 	"fmt"
 )
 
-type Callback func(markingStorer MarkingStorer)
+type Callback func(subject interface{})
 
 type Place string
 
 type Transition struct {
+	Name  string
 	Froms []Place
-	Tos []Place
+	Tos   []Place
 }
 
 type workflow struct {
-	InitialMarking Place
+	name string
 
-	transitions map[string]Transition
-	places []Place
+	definition    definition
+	markingStorer MarkingStorer
 
+	// todo event dispatcher ?
 	callbacks map[string]Callback
 }
 
-func NewWorkflow(initialMarking Place, transitions map[string]Transition, places []Place, callbacks map[string]Callback) (*workflow, error) {
+func NewWorkflow(name string, definition definition, markingStore MarkingStorer, callbacks map[string]Callback) (*workflow, error) {
 	w := &workflow{
-		initialMarking,
-		transitions,
-		places,
+		name,
+		definition,
+		markingStore,
 		callbacks,
 	}
-
-	return w, w.validate()
+	return w, nil
 }
 
-func MustNewWorkflow(initialMarking Place, transitions map[string]Transition, places []Place, callbacks map[string]Callback) *workflow {
-	w, err := NewWorkflow(initialMarking, transitions, places, callbacks)
-	if err != nil {
-		panic(err)
-	}
-
-	return w
-}
-
-func (w *workflow) validate() error {
-	for transitionName, transition := range w.transitions{
-		for _, from := range transition.Froms {
-			if !w.hasPlace(from) {
-				return fmt.Errorf("place %s not declared in workflow on transition %s in from", from, transitionName)
-			}
-		}
-
-		for _, to := range transition.Tos {
-			if !w.hasPlace(to) {
-				return fmt.Errorf("place %s not declared in workflow on transition %s in to", to, transitionName)
-			}
-		}
-	}
-
-	return nil
-}
-
-func (w *workflow) hasPlace(place Place) bool {
-	for _, definedPlace := range w.places {
+func (workflow *workflow) hasPlace(place Place) bool {
+	for _, definedPlace := range workflow.definition.places {
 		if definedPlace == place {
 			return true
 		}
 	}
-
 	return false
 }
 
-func (w *workflow) Can(markingStorer MarkingStorer, transitionName string) bool {
-	currentPlaces := markingStorer.GetMarking().GetPlaces()
-	for _, currentPlace := range currentPlaces{
-		for _, from := range w.getTransition(transitionName).Froms {
-			if from == currentPlace {
-				return true
-			}
+func (workflow *workflow) GetMarking(subject interface{}) (*Marking, error) {
+	marking, err := workflow.markingStorer.GetMarking(subject)
+	if err != nil {
+		return nil, err
+	}
+	// Init marking if empty
+	if len(marking.GetPlaces()) == 0 {
+		marking = NewMarking(workflow.definition.initialPlaces...)
+		workflow.markingStorer.SetMarking(subject, *marking)
+
+		//TODO workflow.entered()
+	}
+	return marking, nil
+}
+
+func (workflow *workflow) Can(subject interface{}, transitionName string) bool {
+	workflow.GetMarking(subject)
+	for _, transition := range workflow.definition.transitions {
+		if transition.Name != transitionName {
+			continue
 		}
+		// TODO transition blocker
+		return true
 	}
-
 	return false
 }
 
-func (w *workflow) Apply(markingStorer MarkingStorer, transitionName string) bool {
-	if !w.Can(markingStorer, transitionName) {
-		return false
+func (workflow *workflow) Apply(subject interface{}, transitionName string) error {
+	if _, ok := workflow.definition.transitions[transitionName]; !ok {
+		return fmt.Errorf("transition %s is not defined for workflow %s", transitionName, workflow.name)
+	}
+	marking, err := workflow.GetMarking(subject)
+	if err != nil {
+		return err
+	}
+	var approvedTransitions []Transition
+	for _, transition := range workflow.definition.transitions {
+		if transition.Name != transitionName {
+			continue
+		}
+		// TODO transition blocker
+		approvedTransitions = append(approvedTransitions, transition)
 	}
 
-	transition := w.getTransition(transitionName)
-	w.leave(markingStorer, transition)
-	w.transition(markingStorer, transitionName)
-	w.enter(markingStorer, transition)
-
-	for _, to := range transition.Tos {
-		markingStorer.GetMarking().Mark(to)
+	if len(approvedTransitions) == 0 {
+		return fmt.Errorf("transition %s is not enable for workflow %s", transitionName, workflow.name)
 	}
 
-	w.entered(markingStorer, transition)
-	w.completed(markingStorer, transitionName)
-	w.announce(markingStorer, transition)
+	for _, transition := range approvedTransitions {
+		workflow.leave(subject, transition, marking)
+		workflow.transition(subject, transition, marking)
+		workflow.enter(subject, transition, marking)
 
-	return true
+		workflow.markingStorer.SetMarking(subject, *marking)
+
+		workflow.entered(subject, transition, marking)
+		workflow.completed(subject, transition, marking)
+		workflow.announce(subject, transition, marking)
+	}
+	return nil
 }
 
-func (w *workflow) leave(markingStorer MarkingStorer, transition Transition) {
-	w.callCallback("leave", markingStorer)
+func (workflow *workflow) leave(subject interface{}, transition Transition, marking *Marking) {
+	workflow.callCallback("workflow.leave", subject)
+	workflow.callCallback("workflow."+workflow.name+".leave", subject)
 
 	places := transition.Froms
 	for _, place := range places {
-		w.callCallback("leave."+string(place), markingStorer)
+		workflow.callCallback("workflow."+workflow.name+".leave."+string(place), subject)
 	}
 
 	for _, place := range places {
-		markingStorer.GetMarking().Unmark(place)
+		marking.Unmark(place)
 	}
 }
 
-func (w *workflow) transition(markingStorer MarkingStorer, transitionName string) {
-	w.callCallback("transition", markingStorer)
-	w.callCallback("transition."+transitionName, markingStorer)
+func (workflow *workflow) transition(subject interface{}, transition Transition, marking *Marking) {
+	workflow.callCallback("workflow.transition", subject)
+	workflow.callCallback("workflow."+workflow.name+".transition", subject)
+	workflow.callCallback("workflow."+workflow.name+".transition."+transition.Name, subject)
 }
 
-func (w *workflow) enter(markingStorer MarkingStorer, transition Transition) {
-	w.callCallback("enter", markingStorer)
+func (workflow *workflow) enter(subject interface{}, transition Transition, marking *Marking) {
+	workflow.callCallback("workflow.enter", subject)
+	workflow.callCallback("workflow."+workflow.name+".enter", subject)
+	places := transition.Tos
+	for _, place := range places {
+		workflow.callCallback("workflow."+workflow.name+".enter."+string(place), subject)
+	}
+
+	for _, place := range places {
+		marking.Mark(place)
+	}
+}
+
+func (workflow *workflow) entered(subject interface{}, transition Transition, marking *Marking) {
+	workflow.callCallback("workflow.entered", subject)
+	workflow.callCallback("workflow."+workflow.name+".entered", subject)
 	for _, place := range transition.Tos {
-		w.callCallback("enter."+string(place), markingStorer)
+		workflow.callCallback("workflow."+workflow.name+".entered."+string(place), subject)
 	}
 }
 
-func (w *workflow) entered(markingStorer MarkingStorer, transition Transition) {
-	w.callCallback("entered", markingStorer)
-	for _, place := range transition.Tos {
-		w.callCallback("entered."+string(place), markingStorer)
+func (workflow *workflow) completed(subject interface{}, transition Transition, marking *Marking) {
+	workflow.callCallback("workflow.completed", subject)
+	workflow.callCallback("workflow."+workflow.name+".completed", subject)
+	workflow.callCallback("workflow."+workflow.name+".completed."+transition.Name, subject)
+}
+
+func (workflow *workflow) announce(subject interface{}, transition Transition, marking *Marking) {
+	workflow.callCallback("workflow.announce", subject)
+	workflow.callCallback("workflow."+workflow.name+".announce", subject)
+	for transitionName, _ := range workflow.getEnabledTransitions(subject) {
+		workflow.callCallback("workflow."+workflow.name+".announce."+transitionName, subject)
 	}
 }
 
-func (w *workflow) completed(markingStorer MarkingStorer, transitionName string) {
-	w.callCallback("completed", markingStorer)
-	w.callCallback("completed."+transitionName, markingStorer)
-}
-
-func (w *workflow) announce(markingStorer MarkingStorer, transition Transition) {
-	w.callCallback("announce", markingStorer)
-	for transitionName, _ := range w.getEnabledTransitions(markingStorer) {
-		w.callCallback("announce."+transitionName, markingStorer)
+func (workflow *workflow) callCallback(key string, subject interface{}) {
+	if callback, ok := workflow.callbacks[key]; ok {
+		callback(subject)
 	}
 }
 
-func (w *workflow) callCallback(key string, markingStorer MarkingStorer) {
-	if callback, ok := w.callbacks[key]; ok {
-		callback(markingStorer)
-	}
+func (workflow *workflow) hasTransition(transitionName string) bool {
+	_, hasTransition := workflow.definition.transitions[transitionName]
+	return hasTransition
 }
 
-func (w *workflow) getTransition(transitionName string) Transition {
-	return w.transitions[transitionName]
+func (workflow *workflow) getTransition(transitionName string) Transition {
+	return workflow.definition.transitions[transitionName]
 }
 
-func (w *workflow) getEnabledTransitions(markingStorer MarkingStorer) map[string]Transition {
-	enabledTransitions := map[string]Transition {}
-	for transitionName, transition := range w.transitions {
-		if w.Can(markingStorer, transitionName) {
+func (workflow *workflow) getEnabledTransitions(subject interface{}) map[string]Transition {
+	workflow.GetMarking(subject)
+	enabledTransitions := map[string]Transition{}
+	for transitionName, transition := range workflow.definition.transitions {
+		if workflow.Can(subject, transitionName) {
 			enabledTransitions[transitionName] = transition
 		}
 	}

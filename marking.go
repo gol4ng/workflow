@@ -1,15 +1,45 @@
 package workflow
 
+import (
+	"fmt"
+)
+
 type MarkingStorer interface {
-	GetMarking() *Marking
+	GetMarking(subject interface{}) (*Marking, error)
+	SetMarking(subject interface{}, marking Marking) error
+}
+
+type MethodMarkingStorer struct {
+}
+
+func (m *MethodMarkingStorer) GetMarking(subject interface{}) (*Marking, error) {
+	if v, ok := subject.(markedSubject); ok {
+		marking, err := v.GetMarking()
+		return &marking, err
+	}
+	return nil, fmt.Errorf("marking not found")
+}
+
+func (m *MethodMarkingStorer) SetMarking(subject interface{}, marking Marking) error {
+	if v, ok := subject.(markedSubject); ok {
+		return v.SetMarking(marking)
+	}
+	return fmt.Errorf("marking not found")
+}
+
+type markedSubject interface {
+	GetMarking() (Marking, error)
+	SetMarking(marking Marking) error
 }
 
 type Marking struct {
-	places []Place
+	places map[Place]Place
 }
 
 func NewMarking(representation ...Place) *Marking {
-	marking := new(Marking)
+	marking := &Marking{
+		places: map[Place]Place{},
+	}
 	for _, place := range representation {
 		marking.Mark(place)
 	}
@@ -18,30 +48,26 @@ func NewMarking(representation ...Place) *Marking {
 }
 
 func (m *Marking) Mark(place Place) {
-	m.places = append(m.places, place)
+	if _, ok := m.places[place]; !ok {
+		m.places[place] = place
+	}
 }
 
 func (m *Marking) Unmark(p Place) {
-	var newPlaces []Place
-	for _, place := range m.places {
-		if place != p {
-			newPlaces = append(newPlaces, place)
-		}
+	if _, ok := m.places[p]; ok {
+		delete(m.places, p)
 	}
-
-	m.places = newPlaces
 }
 
 func (m *Marking) Has(place Place) bool {
-	for _, currentPlace := range m.places {
-		if currentPlace == place {
-			return true
-		}
-	}
-
-	return false
+	_, has := m.places[place]
+	return has
 }
 
 func (m *Marking) GetPlaces() []Place {
-	return m.places
+	var places []Place
+	for _, place := range m.places {
+		places = append(places, place)
+	}
+	return places
 }
