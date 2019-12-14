@@ -10,7 +10,7 @@ type definition struct {
 	transitions   map[string]Transition
 }
 
-func NewDefinition(places []Place, initialPlace []Place, transitions []Transition) (definition, error) {
+func NewDefinition(places []Place, initialPlaces []Place, transitions []Transition) (definition, error) {
 	definition := &definition{
 		places:      map[Place]Place{},
 		transitions: map[string]Transition{},
@@ -19,10 +19,10 @@ func NewDefinition(places []Place, initialPlace []Place, transitions []Transitio
 	if err := definition.addTransitions(transitions); err != nil {
 		return *definition, err
 	}
-	if err := definition.setInitialPlaces(initialPlace); err != nil {
+	if err := definition.setInitialPlaces(initialPlaces); err != nil {
 		return *definition, err
 	}
-	definition.initialPlaces = initialPlace
+	definition.initialPlaces = initialPlaces
 	return *definition, nil
 }
 

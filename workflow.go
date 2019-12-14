@@ -14,6 +14,8 @@ type Transition struct {
 	Tos   []Place
 }
 
+var nilTransition = Transition{}
+
 type workflow struct {
 	name string
 
@@ -24,11 +26,11 @@ type workflow struct {
 	callbacks map[string]Callback
 }
 
-func NewWorkflow(name string, definition definition, markingStore MarkingStorer, callbacks map[string]Callback) (*workflow, error) {
+func NewWorkflow(name string, definition definition, markingStorer MarkingStorer, callbacks map[string]Callback) (*workflow, error) {
 	w := &workflow{
 		name,
 		definition,
-		markingStore,
+		markingStorer,
 		callbacks,
 	}
 	return w, nil
@@ -50,10 +52,16 @@ func (workflow *workflow) GetMarking(subject interface{}) (*Marking, error) {
 	}
 	// Init marking if empty
 	if len(marking.GetPlaces()) == 0 {
+		if len(workflow.definition.initialPlaces) == 0 {
+			return nil, fmt.Errorf("the Marking is empty and there is no initial place for workflow %s", workflow.name)
+		}
 		marking = NewMarking(workflow.definition.initialPlaces...)
 		workflow.markingStorer.SetMarking(subject, *marking)
 
-		//TODO workflow.entered()
+		// triggered workflow.entered
+		// triggered workflow.{workflow_name}.entered
+		// NOT triggered workflow.{workflow_name}.entered.{place}
+		workflow.entered(subject, nilTransition, marking)
 	}
 	return marking, nil
 }
